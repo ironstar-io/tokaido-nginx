@@ -1,193 +1,202 @@
 #!/usr/bin/env bash
-set -euxo pipefail
+set -eo pipefail
 
 ################################################################################
 #
 # Setting Default Variable Values
 # Tokaido enables us to set variable values at three levels. These levels
 # are as follows, listed from highest-priority to lowest-priority
-# 1 - As Config Variable in .tok/config.yml
-# 2 - As Environment Variable exposed to the PHP container
+# 1 - As Environment Variable exposed to the PHP container
+# 2 - As Config Variable in .tok/config.yml
 # 3 - As default variable defined here
-# 
+#
 # For example, if the variable FASTCGI_BUFFERS is defined in .tok/config.yml
 # then any value set as an environment variable (FASTCGI_BUFFERS) won't be used
 #
 ################################################################################
 
+# Colours
+RED='\e[31m'
+BLUE='\e[34m'
+GREEN='\e[32m'
+YELLOW='\e[33m'
+PURPLE='\e[35m'
+CYAN='\e[36m'
+NC='\033[0m' # No Color
+
+printf "${GREEN}NGINX container is starting...${NC}\n"
+
+# resolved holds all of our final values to be applied
+declare -A settings=()
+
+# defaults holds all of our default values
+declare -A defaultSettings
+
 # Default Values
-DEFAULT_WORKER_CONNECTIONS="1024"
-DEFAULT_TYPES_HASH_MAX_SIZE="2048"
-DEFAULT_CLIENT_MAX_BODY_SIZE="1024m"
-DEFAULT_KEEPALIVE_TIMEOUT="65"
-DEFAULT_FASTCGI_READ_TIMEOUT="300"
-DEFAULT_FASTCGI_BUFFERS="16 16k"
-DEFAULT_FASTCGI_BUFFER_SIZE="32k"
-DEFAULT_DRUPAL_ROOT="docroot"
+defaultSettings[WORKER_CONNECTIONS]="1024"
+defaultSettings[TYPES_HASH_MAX_SIZE]="2048"
+defaultSettings[CLIENT_MAX_BODY_SIZE]="1024m"
+defaultSettings[KEEPALIVE_TIMEOUT]="300"
+defaultSettings[FASTCGI_READ_TIMEOUT]="300"
+defaultSettings[FASTCGI_BUFFERS]="16 16k"
+defaultSettings[FASTCGI_BUFFER_SIZE]="32k"
+defaultSettings[DRUPAL_ROOT]="docroot"
 
-# Config values, if set. Otherwise, yq will set to 'null'
-TOK_WORKER_CONNECTIONS="$(yq r /tokaido/site/.tok/config.yml nginx.workerconnections)"
-TOK_TYPES_HASH_MAX_SIZE="$(yq r /tokaido/site/.tok/config.yml nginx.hashmaxsize)"
-TOK_CLIENT_MAX_BODY_SIZE="$(yq r /tokaido/site/.tok/config.yml nginx.clientmaxbodysize)"
-TOK_KEEPALIVE_TIMEOUT="$(yq r /tokaido/site/.tok/config.yml nginx.keepalivetimeout)"
-TOK_FASTCGI_READ_TIMEOUT="$(yq r /tokaido/site/.tok/config.yml nginx.fastcgireadtimeout)"
-TOK_FASTCGI_BUFFERS="$(yq r /tokaido/site/.tok/config.yml nginx.fastcgibuffers)"
-TOK_FASTCGI_BUFFER_SIZE="$(yq r /tokaido/site/.tok/config.yml nginx.fastcgibuffersize)"
-TOK_DRUPAL_ROOT="$(yq r /tokaido/site/.tok/config.yml drupal.path)"
+# Set default "null" Tokaido values
+declare -A tokaidoSettings
+tokaidoSettings[WORKER_CONNECTIONS]="null"
+tokaidoSettings[TYPES_HASH_MAX_SIZE]="null"
+tokaidoSettings[CLIENT_MAX_BODY_SIZE]="null"
+tokaidoSettings[KEEPALIVE_TIMEOUT]="null"
+tokaidoSettings[FASTCGI_READ_TIMEOUT]="null"
+tokaidoSettings[FASTCGI_BUFFERS]="null"
+tokaidoSettings[FASTCGI_BUFFER_SIZE]="null"
+tokaidoSettings[DRUPAL_ROOT]="null"
 
-# Iterate over the variable configurations to get the highest-precedence value
-if [ "${TOK_WORKER_CONNECTIONS}" != "null" ]; then
-    # Tokaido config values have highest precedence, so we'll just use that
-    WORKER_CONNECTIONS="${TOK_WORKER_CONNECTIONS}"
-else
-    # Use an env var value, or our default if none is set
-    WORKER_CONNECTIONS="${WORKER_CONNECTIONS:-$DEFAULT_WORKER_CONNECTIONS}"
+# If there is a tokaido config, look up any values
+if [ -f /tokaido/site/.tok/config.yml ]; then
+    tokaidoSettings[WORKER_CONNECTIONS]="$(yq r /tokaido/site/.tok/config.yml nginx.workerconnections)"
+    tokaidoSettings[TYPES_HASH_MAX_SIZE]="$(yq r /tokaido/site/.tok/config.yml nginx.hashmaxsize)"
+    tokaidoSettings[CLIENT_MAX_BODY_SIZE]="$(yq r /tokaido/site/.tok/config.yml nginx.clientmaxbodysize)"
+    tokaidoSettings[KEEPALIVE_TIMEOUT]="$(yq r /tokaido/site/.tok/config.yml nginx.keepalivetimeout)"
+    tokaidoSettings[FASTCGI_READ_TIMEOUT]="$(yq r /tokaido/site/.tok/config.yml nginx.fastcgireadtimeout)"
+    tokaidoSettings[FASTCGI_BUFFERS]="$(yq r /tokaido/site/.tok/config.yml nginx.fastcgibuffers)"
+    tokaidoSettings[FASTCGI_BUFFER_SIZE]="$(yq r /tokaido/site/.tok/config.yml nginx.fastcgibuffersize)"
+    tokaidoSettings[DRUPAL_ROOT]="$(yq r /tokaido/site/.tok/config.yml drupal.path)"
 fi
 
-if [ "${TOK_TYPES_HASH_MAX_SIZE}" != "null" ]; then
-    TYPES_HASH_MAX_SIZE="${TOK_TYPES_HASH_MAX_SIZE}"
-else
-    TYPES_HASH_MAX_SIZE="${TYPES_HASH_MAX_SIZE:-$DEFAULT_TYPES_HASH_MAX_SIZE}"
-fi
+printf "${BLUE}NGINX will run with the following configuration values and sources:${NC}\n"
+for i in "${!defaultSettings[@]}"
+do
+    if [ -n "${!i}" ]; then
+        # An ENV var exists for this setting, so we'll use it
+        settings["$i"]="${!i}"
+        printf "  ${CYAN}$i${NC}"
+        printf "\033[50D\033[43C :: ${YELLOW}Use Env value${NC}"
+        printf "\033[50D\033[69C :: ${BLUE}$settings[${!i}]${NC}\n"
+        continue
+    elif [ ${tokaidoSettings[$i]} != "null" ] && [ ! -z ${tokaidoSettings[$i]} ]; then
+        # No ENV var exists - check if a Tokaido value exists
+        settings["$i"]="${tokaidoSettings[$i]}"
+        printf "  ${CYAN}$i${NC}"
+        printf "\033[50D\033[43C :: ${GREEN}Use Tokaido value${NC}"
+        printf "\033[50D\033[65C :: ${BLUE}[${settings[$i]}]${NC}\n"
+        continue
+    fi
 
-if [ "${TOK_CLIENT_MAX_BODY_SIZE}" != "null" ]; then
-    CLIENT_MAX_BODY_SIZE="${TOK_CLIENT_MAX_BODY_SIZE}"
-else
-    CLIENT_MAX_BODY_SIZE="${CLIENT_MAX_BODY_SIZE:-$DEFAULT_CLIENT_MAX_BODY_SIZE}"
-fi
-
-if [ "${TOK_KEEPALIVE_TIMEOUT}" != "null" ]; then
-    KEEPALIVE_TIMEOUT="${TOK_KEEPALIVE_TIMEOUT}"
-else
-    KEEPALIVE_TIMEOUT="${KEEPALIVE_TIMEOUT:-$DEFAULT_KEEPALIVE_TIMEOUT}"
-fi
-
-if [ "${TOK_FASTCGI_READ_TIMEOUT}" != "null" ]; then
-    FASTCGI_READ_TIMEOUT="${TOK_FASTCGI_READ_TIMEOUT}"
-else
-    FASTCGI_READ_TIMEOUT="${FASTCGI_READ_TIMEOUT:-$DEFAULT_FASTCGI_READ_TIMEOUT}"
-fi
-
-if [ "${TOK_FASTCGI_BUFFERS}" != "null" ]; then
-    FASTCGI_BUFFERS="${TOK_FASTCGI_BUFFERS}"
-else
-    FASTCGI_BUFFERS="${FASTCGI_BUFFERS:-$DEFAULT_FASTCGI_BUFFERS}"
-fi
-
-if [ "${TOK_FASTCGI_BUFFER_SIZE}" != "null" ]; then
-    FASTCGI_BUFFER_SIZE="${TOK_FASTCGI_BUFFER_SIZE}"
-else
-    FASTCGI_BUFFER_SIZE="${FASTCGI_BUFFER_SIZE:-$DEFAULT_FASTCGI_BUFFER_SIZE}"
-fi
-
-if [ "${TOK_DRUPAL_ROOT}" != "null" ]; then
-    DRUPAL_ROOT="${TOK_DRUPAL_ROOT}"
-else
-    DRUPAL_ROOT="${DRUPAL_ROOT:-$DEFAULT_DRUPAL_ROOT}"
-fi
+    # No env var or tokaido var exists, so we use the default
+    settings["$i"]="${defaultSettings[$i]}"
+    printf "  ${CYAN}$i${NC}"
+    printf "\033[50D\033[43C :: ${PURPLE}Use Default value${NC}"
+    printf "\033[50D\033[65C :: ${BLUE}[${settings[$i]}]${NC}\n"
+done
 
 # Strip any forward-slashes out of our resolve drupal root, just in case
-DRUPAL_ROOT=$(echo $DRUPAL_ROOT | sed -e 's/\///g')
+settings[DRUPAL_ROOT]=$(echo ${settings[DRUPAL_ROOT]} | sed -e 's/\///g')
 
-# FPM_HOSTNAME is a special value that can only be provided 
-# as environment variables, not via the .tok/config.yml file. 
+# FPM_HOSTNAME is a special value that can only be provided
+# as environment variables, not via the .tok/config.yml file.
+settings[FPM_HOSTNAME]=${FPM_HOSTNAME:-fpm}
 
-FPM_HOSTNAME=${FPM_HOSTNAME:-fpm}
+# STATUS_TOKEN is used to restrict access to /nginx-status and /fpm-status
+# URLs, where the user must specify the following token in the querystring.
+# For example, https://project.local.tokaido.io:5154/nginx-status?status-token=tokaido
+
+# If running in a hosted environment, do not use the default status-page token
+if [ ${TOK_PROVIDER+x} ] && [ ! ${STATUS_TOKEN+x} ]; then
+    chars=1234567890abcdefghijklmnopqrstuvwxyz
+    for i in {1..16} ; do
+        settings[STATUS_TOKEN]="${settings[STATUS_TOKEN]}${chars:RANDOM%${#chars}:1}"
+    done
+    printf "${RED}WARNING: You have not specified a secure STATUS_TOKEN. Using random token: ${settings[STATUS_TOKEN]}\n${NC}"
+else
+    settings[STATUS_TOKEN]=${STATUS_TOKEN:-"tokaido"}
+fi
 
 ################################################################################
 #
 # Setting Config Files Paths
-# Tokaido can use Nginx config files to completely override the config
-# files included in this Docker image. For example, if the file 
-# .tok/nginx/redirects.conf exists, it will be used for all redirect config
-# instead of the default. 
+# Tokaido can supply custom Nginx config files to completely override the
+# config files included in this Docker image.
+#
+# For example, if the file .tok/nginx/redirects.conf exists, it will be used
+# for all redirect config instead of the default.
 #
 # These config files can be used in conjunction with the above config values
 # as well, so you can both use your own config file and per-environment
-# overrides from environment variables, for example. 
-# 
+# overrides from environment variables, for example.
+#
 ################################################################################
 
-DEFAULT_NGINX_CONFIG="/tokaido/config/nginx/nginx.conf"
-DEFAULT_HOST_CONFIG="/tokaido/config/nginx/host.conf"
-DEFAULT_MIMETYPES_CONFIG="/tokaido/config/nginx/mimetypes.conf"
-DEFAULT_REDIRECTS_CONFIG="/tokaido/config/nginx/redirects.conf"
-DEFAULT_ADDITIONAL_CONFIG="/tokaido/config/nginx/additional.conf"
+NGINX_CONFIG_FILE="nginx.conf"
+HOST_CONFIG_FILE="host.conf"
+MIMETYPES_CONFIG_FILE="mimetypes.conf"
+REDIRECTS_CONFIG_FILE="redirects.conf"
+ADDITIONAL_CONFIG_FILE="additional.conf"
+SECURITY_CONFIG_FILE="security.conf"
 
-CUSTOM_NGINX_CONFIG="/tokaido/site/.tok/nginx/nginx.conf"
-CUSTOM_HOST_CONFIG="/tokaido/site/.tok/nginx/host.conf"
-CUSTOM_MIMETYPES_CONFIG="/tokaido/site/.tok/nginx/mimetypes.conf"
-CUSTOM_REDIRECTS_CONFIG="/tokaido/site/.tok/nginx/redirects.conf"
-CUSTOM_ADDITIONAL_CONFIG="/tokaido/site/.tok/nginx/additional.conf"
+DEFAULT_CONFIG_PATH="/tokaido/config/nginx"
+CUSTOM_CONFIG_PATH="/tokaido/site/.tok/nginx"
 
-if [ -f "${CUSTOM_NGINX_CONFIG}" ]; then
-    NGINX_CONFIG="${CUSTOM_NGINX_CONFIG}"
-else 
-    NGINX_CONFIG="${DEFAULT_NGINX_CONFIG}"
+declare -A configFiles
+configFiles[NGINX_CONFIG]="$DEFAULT_CONFIG_PATH/$NGINX_CONFIG_FILE"
+configFiles[HOST_CONFIG]="$DEFAULT_CONFIG_PATH/$HOST_CONFIG_FILE"
+configFiles[MIMETYPES_CONFIG]="$DEFAULT_CONFIG_PATH/$MIMETYPES_CONFIG_FILE"
+configFiles[REDIRECTS_CONFIG]="$DEFAULT_CONFIG_PATH/$REDIRECTS_CONFIG_FILE"
+configFiles[ADDITIONAL_CONFIG]="$DEFAULT_CONFIG_PATH/$ADDITIONAL_CONFIG_FILE"
+configFiles[SECURITY_CONFIG]="$DEFAULT_CONFIG_PATH/$SECURITY_CONFIG_FILE"
+
+printf "${BLUE}Discovering any custom NGINX configuration files...${NC}\n"
+if [ -f "${CUSTOM_CONFIG_PATH}/${NGINX_CONFIG_FILE}" ]; then
+    configFiles[NGINX_CONFIG]="${CUSTOM_CONFIG_PATH}/${NGINX_CONFIG_FILE}"
+    printf "${YELLOW}Custom config file ${configFiles[NGINX_CONFIG]} will be used${NC}\n"
 fi
 
-if [ -f "${CUSTOM_HOST_CONFIG}" ]; then
-    HOST_CONFIG="${CUSTOM_HOST_CONFIG}"
-else 
-    HOST_CONFIG="${DEFAULT_HOST_CONFIG}"
+if [ -f "${CUSTOM_CONFIG_PATH}/${HOST_CONFIG_FILE}" ]; then
+    configFiles[HOST_CONFIG]="${CUSTOM_CONFIG_PATH}/${HOST_CONFIG_FILE}"
+    printf "${YELLOW}Custom config file ${configFiles[HOST_CONFIG]} will be used${NC}\n"
 fi
 
-if [ -f "${CUSTOM_MIMETYPES_CONFIG}" ]; then
-    MIMETYPES_CONFIG="${CUSTOM_MIMETYPES_CONFIG}"
-else 
-    MIMETYPES_CONFIG="${DEFAULT_MIMETYPES_CONFIG}"
+if [ -f "${CUSTOM_CONFIG_PATH}/${MIMETYPES_CONFIG_FILE}" ]; then
+    configFiles[MIMETYPES_CONFIG]="${CUSTOM_CONFIG_PATH}/${MIMETYPES_CONFIG_FILE}"
+    printf "${YELLOW}Custom config file ${configFiles[MIMETYPES_CONFIG]} will be used${NC}\n"
 fi
 
-if [ -f "${CUSTOM_REDIRECTS_CONFIG}" ]; then
-    REDIRECTS_CONFIG="${CUSTOM_REDIRECTS_CONFIG}"
-else 
-    REDIRECTS_CONFIG="${DEFAULT_REDIRECTS_CONFIG}"
+if [ -f "${CUSTOM_CONFIG_PATH}/${REDIRECTS_CONFIG_FILE}" ]; then
+    configFiles[REDIRECTS_CONFIG]="${CUSTOM_CONFIG_PATH}/${REDIRECTS_CONFIG_FILE}"
+    printf "${YELLOW}Custom config file ${configFiles[REDIRECTS_CONFIG]} will be used${NC}\n"
 fi
 
-if [ -f "${CUSTOM_ADDITIONAL_CONFIG}" ]; then
-    ADDITIONAL_CONFIG="${CUSTOM_ADDITIONAL_CONFIG}"
-else 
-    ADDITIONAL_CONFIG="${DEFAULT_ADDITIONAL_CONFIG}"
+if [ -f "${CUSTOM_CONFIG_PATH}/${ADDITIONAL_CONFIG_FILE}" ]; then
+    configFiles[ADDITIONAL_CONFIG]="${CUSTOM_CONFIG_PATH}/${ADDITIONAL_CONFIG_FILE}"
+    printf "${YELLOW}Custom config file ${configFiles[ADDITIONAL_CONFIG]} will be used${NC}\n"
 fi
 
-if [ -f "${CUSTOM_ADDITIONAL_CONFIG}" ]; then
-    ADDITIONAL_CONFIG="${CUSTOM_ADDITIONAL_CONFIG}"
-else 
-    ADDITIONAL_CONFIG="${DEFAULT_ADDITIONAL_CONFIG}"
+# Place all our defined variables into their respective config files
+printf "Provisioning NGINX config files...\n"
+sed -i "s/{{.WORKER_CONNECTIONS}}/${settings[WORKER_CONNECTIONS]}/g" "${configFiles[NGINX_CONFIG]}"
+sed -i "s/{{.TYPES_HASH_MAX_SIZE}}/${settings[TYPES_HASH_MAX_SIZE]}/g" "${configFiles[NGINX_CONFIG]}"
+sed -i "s/{{.CLIENT_MAX_BODY_SIZE}}/${settings[CLIENT_MAX_BODY_SIZE]}/g" "${configFiles[NGINX_CONFIG]}"
+sed -i "s/{{.KEEPALIVE_TIMEOUT}}/${settings[KEEPALIVE_TIMEOUT]}/g" "${configFiles[NGINX_CONFIG]}"
+sed -i "s/{{.FASTCGI_READ_TIMEOUT}}/${settings[FASTCGI_READ_TIMEOUT]}/g" "${configFiles[HOST_CONFIG]}"
+sed -i "s/{{.FASTCGI_BUFFERS}}/${settings[FASTCGI_BUFFERS]}/g" "${configFiles[HOST_CONFIG]}"
+sed -i "s/{{.FASTCGI_BUFFER_SIZE}}/${settings[FASTCGI_BUFFER_SIZE]}/g" "${configFiles[HOST_CONFIG]}"
+sed -i "s/{{.DRUPAL_ROOT}}/${settings[DRUPAL_ROOT]}/g" "${configFiles[HOST_CONFIG]}"
+sed -i "s/{{.FPM_HOSTNAME}}/${settings[FPM_HOSTNAME]}/g" "${configFiles[HOST_CONFIG]}"
+sed -i "s/{{.STATUS_TOKEN}}/${settings[STATUS_TOKEN]}/g" "${configFiles[HOST_CONFIG]}"
+
+sed -i "s/{{.HOST_CONFIG}}/${configFiles[HOST_CONFIG]//\//\\\/}/g" "${configFiles[NGINX_CONFIG]}"
+sed -i "s/{{.MIMETYPES_CONFIG}}/${configFiles[MIMETYPES_CONFIG]//\//\\\/}/g" "${configFiles[NGINX_CONFIG]}"
+sed -i "s/{{.REDIRECTS_CONFIG}}/${configFiles[REDIRECTS_CONFIG]//\//\\\/}/g" "${configFiles[HOST_CONFIG]}"
+sed -i "s/{{.ADDITIONAL_CONFIG}}/${configFiles[ADDITIONAL_CONFIG]//\//\\\/}/g" "${configFiles[HOST_CONFIG]}"
+
+# In production environments, we'll load the security config in to block access to sensitive files
+# We intend to expand this functionality in the future to rapidly respond to new security annoucements
+if [ ${TOK_PROVIDER+x} ]; then
+    sed -i "s/{{.SECURITY_CONFIG}}/include ${configFiles[SECURITY_CONFIG]//\//\\\/};/g" "${configFiles[HOST_CONFIG]}"
+else
+    sed -i "s/{{.SECURITY_CONFIG}}//g" "${configFiles[HOST_CONFIG]}"
 fi
 
-
-# Output all our resolved values for logging to catch
-
-echo "config value 'WORKER_CONNECTIONS'   :: ${WORKER_CONNECTIONS}"
-echo "config value 'TYPES_HASH_MAX_SIZE'  :: ${TYPES_HASH_MAX_SIZE}"
-echo "config value 'CLIENT_MAX_BODY_SIZE' :: ${CLIENT_MAX_BODY_SIZE}"
-echo "config value 'KEEPALIVE_TIMEOUT'    :: ${KEEPALIVE_TIMEOUT}"
-echo "config value 'FASTCGI_READ_TIMEOUT' :: ${FASTCGI_READ_TIMEOUT}"
-echo "config value 'FASTCGI_BUFFERS'      :: ${FASTCGI_BUFFERS}"
-echo "config value 'FASTCGI_BUFFER_SIZE'  :: ${FASTCGI_BUFFER_SIZE}"
-echo "config value 'DRUPAL_ROOT'          :: ${DRUPAL_ROOT}"
-echo "config value 'FPM_HOSTNAME'         :: ${FPM_HOSTNAME}"
-echo "config file 'nginx.conf'            :: ${NGINX_CONFIG}"
-echo "config file 'host.conf'             :: ${HOST_CONFIG}"
-echo "config file 'mimetypes.conf'        :: ${MIMETYPES_CONFIG}"
-echo "config file 'redirects.conf'        :: ${REDIRECTS_CONFIG}"
-echo "config file 'additional.conf'       :: ${ADDITIONAL_CONFIG}"
-
-# Finally, place all our defined variables into their respective config files
-sed -i "s/{{.WORKER_CONNECTIONS}}/${WORKER_CONNECTIONS}/g" "${NGINX_CONFIG}"
-sed -i "s/{{.TYPES_HASH_MAX_SIZE}}/${TYPES_HASH_MAX_SIZE}/g" "${NGINX_CONFIG}"
-sed -i "s/{{.CLIENT_MAX_BODY_SIZE}}/${CLIENT_MAX_BODY_SIZE}/g" "${NGINX_CONFIG}"
-sed -i "s/{{.KEEPALIVE_TIMEOUT}}/${KEEPALIVE_TIMEOUT}/g" "${NGINX_CONFIG}"
-sed -i "s/{{.FASTCGI_READ_TIMEOUT}}/${FASTCGI_READ_TIMEOUT}/g" "${HOST_CONFIG}"
-sed -i "s/{{.FASTCGI_BUFFERS}}/${FASTCGI_BUFFERS}/g" "${HOST_CONFIG}"
-sed -i "s/{{.FASTCGI_BUFFER_SIZE}}/${FASTCGI_BUFFER_SIZE}/g" "${HOST_CONFIG}"
-sed -i "s/{{.DRUPAL_ROOT}}/${DRUPAL_ROOT}/g" "${HOST_CONFIG}"
-sed -i "s/{{.FPM_HOSTNAME}}/${FPM_HOSTNAME}/g" "${HOST_CONFIG}"
-
-sed -i "s/{{.HOST_CONFIG}}/${HOST_CONFIG//\//\\\/}/g" "${NGINX_CONFIG}"
-sed -i "s/{{.MIMETYPES_CONFIG}}/${MIMETYPES_CONFIG//\//\\\/}/g" "${NGINX_CONFIG}"
-sed -i "s/{{.REDIRECTS_CONFIG}}/${REDIRECTS_CONFIG//\//\\\/}/g" "${HOST_CONFIG}"
-sed -i "s/{{.ADDITIONAL_CONFIG}}/${ADDITIONAL_CONFIG//\//\\\/}/g" "${HOST_CONFIG}"
-
-nginx -c "${NGINX_CONFIG}"
+printf "${GREEN}Starting NGINX...${NC}\n"
+nginx -c "${configFiles[NGINX_CONFIG]}"

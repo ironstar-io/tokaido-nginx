@@ -16,13 +16,13 @@ RUN apt update  \
         telnet \
 	    netcat \
 	&& mkdir -p /tokaido/config/nginx/conf.d/sites /tokaido/config/nginx/conf.d/redirects \
-	&& mkdir -p /tokaido/logs/nginx \	
+	&& mkdir -p /tokaido/logs/nginx \
 	&& mkdir -p /tokaido/site/docroot \
-	&& mkdir -p /var/cache/nginx \	
+	&& mkdir -p /var/cache/nginx \
 	&& groupadd -g 1001 web  \
 	&& userdel nginx \
 	&& useradd -s /sbin/nologin -g web -u 1001 tok  \
-    && useradd -s /sbin/nologin -d /var/cache/nginx -g web -u 1002 nginx  \			
+    && useradd -s /sbin/nologin -d /var/cache/nginx -g web -u 1002 nginx  \
 	&& chown tok:web /tokaido -R \
 	&& chown nginx:web /tokaido/logs/nginx \
 	&& chown nginx:web /var/cache/nginx \
@@ -38,10 +38,12 @@ COPY config/host.conf /tokaido/config/nginx/host.conf
 COPY config/redirects.conf /tokaido/config/nginx/redirects.conf
 COPY config/mimetypes.conf /tokaido/config/nginx/mimetypes.conf
 COPY config/additional.conf /tokaido/config/nginx/additional.conf
+COPY config/security.conf /tokaido/config/nginx/security.conf
 COPY config/phpinfo.php /tokaido/site/docroot/phpinfo.php
+COPY config/fastcgi_params /etc/nginx/fastcgi_params
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 
-RUN chown nginx:web /tokaido/config/nginx -R \	
+RUN chown nginx:web /tokaido/config/nginx -R \
 	&& chmod 600 /tokaido/config/nginx/*.conf \
 	&& chmod 700 /tokaido/config/nginx \
 	&& chown nginx:web /usr/local/bin/entrypoint.sh \
