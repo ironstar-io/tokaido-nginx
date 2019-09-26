@@ -41,6 +41,7 @@ defaultSettings[FASTCGI_READ_TIMEOUT]="300"
 defaultSettings[FASTCGI_BUFFERS]="16 16k"
 defaultSettings[FASTCGI_BUFFER_SIZE]="32k"
 defaultSettings[DRUPAL_ROOT]="docroot"
+defaultSettings[ALLOWED_HOSTS]="localhost"
 
 # Set default "null" Tokaido values
 declare -A tokaidoSettings
@@ -98,20 +99,22 @@ settings[DRUPAL_ROOT]=$(echo ${settings[DRUPAL_ROOT]} | sed -e 's/\///g')
 # as environment variables, not via the .tok/config.yml file.
 settings[FPM_HOSTNAME]=${FPM_HOSTNAME:-fpm}
 
-# STATUS_TOKEN is used to restrict access to /nginx-status and /fpm-status
-# URLs, where the user must specify the following token in the querystring.
-# For example, https://project.local.tokaido.io:5154/nginx-status?status-token=tokaido
-
-# If running in a hosted environment, do not use the default status-page token
-if [ ${TOK_PROVIDER+x} ] && [ ! ${STATUS_TOKEN+x} ]; then
-    chars=1234567890abcdefghijklmnopqrstuvwxyz
-    for i in {1..16} ; do
-        settings[STATUS_TOKEN]="${settings[STATUS_TOKEN]}${chars:RANDOM%${#chars}:1}"
-    done
-    printf "${RED}WARNING: You have not specified a secure STATUS_TOKEN. Using random token: ${settings[STATUS_TOKEN]}\n${NC}"
+# ALLOWED_HOSTS can only be provided via a base64 encoded environment variable
+# this value can be anything matching the nginx server_name directive, including wildcards
+if [ ! -z "$ALLOWED_HOSTS" ]; then
+    settings[ALLOWED_HOSTS]=$(echo "$ALLOWED_HOSTS" | base64 --decode)
 else
-    settings[STATUS_TOKEN]=${STATUS_TOKEN:-"tokaido"}
+    settings[ALLOWED_HOSTS]="${defaultSettings[ALLOWED_HOSTS]}"
 fi
+
+# BLOCK_UNKNOWN_HOSTS if "true" will add a default server_name block that prohibits unconfigured
+# ALLOWED_HOSTS from being served content
+if [ ! -z "${BLOCK_UNKNOWN_HOSTS}" ]; then
+    settings[BLOCK_UNKNOWN_HOSTS]="server {\n    listen 8082 default_server;\n    server_name _;\n    return 400;\n}"
+else
+    settings[BLOCK_UNKNOWN_HOSTS]=""
+fi
+
 
 ################################################################################
 #
@@ -184,6 +187,8 @@ sed -i "s/{{.FASTCGI_BUFFER_SIZE}}/${settings[FASTCGI_BUFFER_SIZE]}/g" "${config
 sed -i "s/{{.DRUPAL_ROOT}}/${settings[DRUPAL_ROOT]}/g" "${configFiles[HOST_CONFIG]}"
 sed -i "s/{{.FPM_HOSTNAME}}/${settings[FPM_HOSTNAME]}/g" "${configFiles[HOST_CONFIG]}"
 sed -i "s/{{.STATUS_TOKEN}}/${settings[STATUS_TOKEN]}/g" "${configFiles[HOST_CONFIG]}"
+sed -i "s/{{.ALLOWED_HOSTS}}/${settings[ALLOWED_HOSTS]}/g" "${configFiles[HOST_CONFIG]}"
+sed -i "s/{{.BLOCK_UNKNOWN_HOSTS}}/${settings[BLOCK_UNKNOWN_HOSTS]}/g" "${configFiles[HOST_CONFIG]}"
 
 sed -i "s/{{.HOST_CONFIG}}/${configFiles[HOST_CONFIG]//\//\\\/}/g" "${configFiles[NGINX_CONFIG]}"
 sed -i "s/{{.MIMETYPES_CONFIG}}/${configFiles[MIMETYPES_CONFIG]//\//\\\/}/g" "${configFiles[NGINX_CONFIG]}"
