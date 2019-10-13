@@ -76,7 +76,7 @@ do
         printf "\033[50D\033[43C :: ${YELLOW}Use Env value${NC}"
         printf "\033[50D\033[69C :: ${BLUE}$settings[${!i}]${NC}\n"
         continue
-    elif [ ${tokaidoSettings[$i]} != "null" ] && [ ! -z ${tokaidoSettings[$i]} ]; then
+    elif [[ ${tokaidoSettings[$i]} != "null" ]] && [[ ! -z ${tokaidoSettings[$i]} ]]; then
         # No ENV var exists - check if a Tokaido value exists
         settings["$i"]="${tokaidoSettings[$i]}"
         printf "  ${CYAN}$i${NC}"
